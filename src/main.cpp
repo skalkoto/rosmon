@@ -16,6 +16,7 @@
 #include <csignal>
 
 #include <iostream>
+#include <string>
 
 #include <fmt/format.h>
 
@@ -67,6 +68,9 @@ void usage()
 		"  --name=NAME    Use NAME as ROS node name. By default, an anonymous\n"
 		"                 name is chosen.\n"
 		"  --no-start     Don't automatically start the nodes in the beginning\n"
+		"  --shutdown-timeout=SECONDS\n"
+		"                 Kill a process if it is still running this long\n"
+		"                 after the initial signal is send.\n"
 		"\n"
 		"rosmon also obeys some environment variables:\n"
 		"  ROSMON_COLOR_MODE   Can be set to 'truecolor', '256colors', 'ansi'\n"
@@ -103,6 +107,7 @@ static const struct option OPTIONS[] = {
 	{"log",  required_argument, nullptr, 'l'},
 	{"name", required_argument, nullptr, 'n'},
 	{"no-start", no_argument, nullptr, 'S'},
+	{"shutdown-timeout", required_argument, nullptr, 's'},
 	{nullptr, 0, nullptr, 0}
 };
 
@@ -111,6 +116,47 @@ enum Action {
 	ACTION_BENCHMARK,
 	ACTION_LIST_ARGS,
 };
+
+int parseArgPositive(const char* optName, const char* optVal)
+{
+	const std::string val(optVal);
+	size_t idx = 0;
+	int number;
+	auto printError = [&] (const char *reason) {
+		fmt::print(stderr, "Error: Invalid value '{}' for option: '{}'. Reason: {}\n",
+			   optVal, optName, reason);
+	};
+
+	try
+	{
+		number = std::stoi(val, &idx);
+	}
+	catch (const std::invalid_argument&)
+	{
+		printError("Not a number");
+		return -1;
+	}
+	catch (const std::out_of_range&)
+	{
+		printError("Number is too big");
+		return -1;
+	}
+
+	// Check if all characters of the argument are consumed
+	if(idx != val.length())
+	{
+		printError("Not a number");
+		return -1;
+	}
+
+	if(number < 0)
+	{
+		printError("Negative number");
+		return -1;
+	}
+
+	return number;
+}
 
 int main(int argc, char** argv)
 {
@@ -122,6 +168,7 @@ int main(int argc, char** argv)
 	bool enableUI = true;
 	bool flushLog = false;
 	bool startNodes = true;
+	int shutdownTimeout = 5;
 
 	// Parse options
 	while(true)
@@ -157,6 +204,10 @@ int main(int argc, char** argv)
 				break;
 			case 'S':
 				startNodes = false;
+			case 's':
+				shutdownTimeout = parseArgPositive("shutdown-timeout", optarg);
+				if(shutdownTimeout < 0)
+					return 1;
 				break;
 		}
 	}
@@ -380,7 +431,7 @@ int main(int argc, char** argv)
 
 	// Wait for graceful shutdown
 	ros::WallTime start = ros::WallTime::now();
-	while(!monitor.allShutdown() && ros::WallTime::now() - start < ros::WallDuration(5.0))
+	while(!monitor.allShutdown() && ros::WallTime::now() - start < ros::WallDuration(shutdownTimeout))
 	{
 		watcher->wait(waitDuration);
 
